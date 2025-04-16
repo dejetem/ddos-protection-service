@@ -11,6 +11,16 @@ default_limit = 100
 burst_size = 200
 window_seconds = 60
 
+[ddos_detection]
+connection_rate_threshold = 100
+connection_rate_window = 60
+request_rate_threshold = 1000
+request_rate_window = 60
+traffic_volume_threshold = 10000000
+traffic_volume_window = 60
+anomaly_threshold = 3.0
+anomaly_window = 300
+
 [cloudflare]
 api_token = ""
 zone_id = "" 

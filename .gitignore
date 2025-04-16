@@ -29,4 +29,6 @@ redis-data/
 coverage/
 *.profraw
 
+
 phase_1.md
+phase_2.md

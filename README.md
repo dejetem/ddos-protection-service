@@ -31,9 +31,9 @@ This service provides robust DDoS protection and traffic management capabilities
 - **src/**: Contains the main source code
    - **main.rs**: Application entry point
    - **api/**: HTTP endpoints
-   - **core/**: Core business logic (rate limiting)
+   - **core/**: Core business logic
    - **config/**: Configuration management
-- ** config/**: Configuration files
+- **config/**: Configuration files
 - **docker/**: Docker-related files
 - **tests/**: Test suites
 

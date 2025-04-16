@@ -22,6 +22,15 @@ pub fn load_config() -> Result<Config, ConfigError> {
         .set_default("rate_limit.default_limit", 100)?
         .set_default("rate_limit.burst_size", 200)?
         .set_default("rate_limit.window_seconds", 60)?
+        // DDoS detection defaults
+        .set_default("ddos_detection.connection_rate_threshold", 100)?
+        .set_default("ddos_detection.connection_rate_window", 60)?
+        .set_default("ddos_detection.request_rate_threshold", 1000)?
+        .set_default("ddos_detection.request_rate_window", 60)?
+        .set_default("ddos_detection.traffic_volume_threshold", 10_000_000)?
+        .set_default("ddos_detection.traffic_volume_window", 60)?
+        .set_default("ddos_detection.anomaly_threshold", 3.0)?
+        .set_default("ddos_detection.anomaly_window", 300)?
         .build()?;
 
     config.try_deserialize()
