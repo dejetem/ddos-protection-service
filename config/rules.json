@@ -1,0 +1,104 @@
+{
+    "rules": [
+        {
+            "id": "rule_1",
+            "name": "High Traffic Rule",
+            "description": "Block IPs with high request rate",
+            "conditions": [
+                {
+                    "RequestRate": {
+                        "threshold": 100,
+                        "window_seconds": 60
+                    }
+                }
+            ],
+            "actions": [
+                {
+                    "Block": {
+                        "duration_seconds": 300
+                    }
+                }
+            ],
+            "priority": 1,
+            "enabled": true
+        },
+        {
+            "id": "rule_2",
+            "name": "Suspicious User Agent Rule",
+            "description": "Block requests with suspicious user agents",
+            "conditions": [
+                {
+                    "UserAgent": {
+                        "pattern": "bot"
+                    }
+                }
+            ],
+            "actions": [
+                {
+                    "Block": {
+                        "duration_seconds": 600
+                    }
+                }
+            ],
+            "priority": 2,
+            "enabled": true
+        },
+        {
+            "id": "rule_3",
+            "name": "Rate Limit Warning",
+            "description": "Log when rate limit is exceeded",
+            "conditions": [
+                {
+                    "RequestRate": {
+                        "threshold": 50,
+                        "window_seconds": 30
+                    }
+                }
+            ],
+            "actions": [
+                {
+                    "Log": {
+                        "level": "warning",
+                        "message": "Rate limit exceeded for IP"
+                    }
+                }
+            ],
+            "priority": 0,
+            "enabled": true
+        },
+        {
+            "id": "rule_4",
+            "name": "DDoS Attack Rule",
+            "description": "Block traffic during DDoS attack and notify",
+            "conditions": [
+                {
+                    "RequestRate": {
+                        "threshold": 1000,
+                        "window_seconds": 60
+                    }
+                },
+                {
+                    "TrafficVolume": {
+                        "threshold_bytes": 10000000,
+                        "window_seconds": 60
+                    }
+                }
+            ],
+            "actions": [
+                {
+                    "Block": {
+                        "duration_seconds": 3600
+                    }
+                },
+                {
+                    "Notify": {
+                        "channel": "security",
+                        "message": "DDoS attack detected"
+                    }
+                }
+            ],
+            "priority": 3,
+            "enabled": true
+        }
+    ]
+} 

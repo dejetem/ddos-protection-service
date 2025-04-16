@@ -6,6 +6,7 @@ Cargo.lock
 # Environment variables
 .env
 .env.local
+.env.dev
 .key
 
 # IDE specific
@@ -32,3 +33,4 @@ coverage/
 
 phase_1.md
 phase_2.md
+phase_3.md

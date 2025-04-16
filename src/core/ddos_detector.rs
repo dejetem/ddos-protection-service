@@ -5,11 +5,10 @@
 //! and anomaly detection.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::utils::format_rate_limit_key;
 
 /// Errors that can occur during DDoS detection
 #[derive(Error, Debug)]
@@ -94,27 +93,25 @@ impl DdosDetector {
     /// * `Ok(true)` if the connection should be blocked
     /// * `Err(DdosDetectionError)` if there was an error during detection
     pub async fn check_connection(&mut self, ip: &str) -> Result<bool, DdosDetectionError> {
-        // Update connection tracker
-        let now = Instant::now();
-        let connections = self.connection_tracker.entry(ip.to_string()).or_insert_with(VecDeque::new);
+        let key = format!("connection:{}", ip);
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
         
-        // Remove old connections
-        let window_duration = Duration::from_secs(self.config.connection_rate_window as u64);
-        while connections.front().map_or(false, |&time| now.duration_since(time) > window_duration) {
-            connections.pop_front();
+        let count: u32 = match conn.incr(&key, 1).await {
+            Ok(count) => count,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        
+        if count == 1 {
+            let _: () = match conn.expire::<_, ()>(&key, self.config.connection_rate_window as usize).await {
+                Ok(_) => (),
+                Err(e) => return Err(DdosDetectionError::RedisError(e)),
+            };
         }
         
-        // Add new connection
-        connections.push_back(now);
-        
-        // Check if connection rate exceeds threshold
-        if connections.len() > self.config.connection_rate_threshold as usize {
-            // Store in Redis for persistence
-            let key = format_rate_limit_key("ddos_connection", ip);
-            let mut conn = self.redis.get_async_connection().await?;
-            conn.set(&key, get_current_timestamp()).await?;
-            conn.expire(&key, self.config.connection_rate_window as usize).await?;
-            
+        if count > self.config.connection_rate_threshold {
             return Ok(true);
         }
         
@@ -134,56 +131,33 @@ impl DdosDetector {
     /// * `Ok(true)` if the request should be blocked
     /// * `Err(DdosDetectionError)` if there was an error during detection
     pub async fn check_request(&mut self, ip: &str, size: u64) -> Result<bool, DdosDetectionError> {
-        // Update request tracker
-        let now = Instant::now();
-        let requests = self.request_tracker.entry(ip.to_string()).or_insert_with(VecDeque::new);
+        let key = format!("request:{}", ip);
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
         
-        // Remove old requests
-        let window_duration = Duration::from_secs(self.config.request_rate_window as u64);
-        while requests.front().map_or(false, |&time| now.duration_since(time) > window_duration) {
-            requests.pop_front();
+        let count: u32 = match conn.incr(&key, 1).await {
+            Ok(count) => count,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        let volume: u64 = match conn.incr(format!("volume:{}", ip), size).await {
+            Ok(volume) => volume,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        
+        if count == 1 {
+            let _: () = match conn.expire::<_, ()>(&key, self.config.request_rate_window as usize).await {
+                Ok(_) => (),
+                Err(e) => return Err(DdosDetectionError::RedisError(e)),
+            };
+            let _: () = match conn.expire::<_, ()>(format!("volume:{}", ip), self.config.traffic_volume_window as usize).await {
+                Ok(_) => (),
+                Err(e) => return Err(DdosDetectionError::RedisError(e)),
+            };
         }
         
-        // Add new request
-        requests.push_back(now);
-        
-        // Update traffic tracker
-        let traffic = self.traffic_tracker.entry(ip.to_string()).or_insert_with(VecDeque::new);
-        
-        // Remove old traffic entries
-        let traffic_window_duration = Duration::from_secs(self.config.traffic_volume_window as u64);
-        while traffic.front().map_or(false, |&(time, _)| now.duration_since(time) > traffic_window_duration) {
-            traffic.pop_front();
-        }
-        
-        // Add new traffic entry
-        traffic.push_back((now, size));
-        
-        // Check if request rate exceeds threshold
-        if requests.len() > self.config.request_rate_threshold as usize {
-            // Store in Redis for persistence
-            let key = format_rate_limit_key("ddos_request", ip);
-            let mut conn = self.redis.get_async_connection().await?;
-            conn.set(&key, get_current_timestamp()).await?;
-            conn.expire(&key, self.config.request_rate_window as usize).await?;
-            
-            return Ok(true);
-        }
-        
-        // Check if traffic volume exceeds threshold
-        let total_traffic: u64 = traffic.iter().map(|&(_, size)| size).sum();
-        if total_traffic > self.config.traffic_volume_threshold {
-            // Store in Redis for persistence
-            let key = format_rate_limit_key("ddos_traffic", ip);
-            let mut conn = self.redis.get_async_connection().await?;
-            conn.set(&key, get_current_timestamp()).await?;
-            conn.expire(&key, self.config.traffic_volume_window as usize).await?;
-            
-            return Ok(true);
-        }
-        
-        // Check for anomalies
-        if self.detect_anomaly(ip).await? {
+        if count > self.config.request_rate_threshold || volume > self.config.traffic_volume_threshold {
             return Ok(true);
         }
         
@@ -202,47 +176,25 @@ impl DdosDetector {
     /// * `Ok(true)` if anomalies were detected
     /// * `Err(DdosDetectionError)` if there was an error during detection
     async fn detect_anomaly(&self, ip: &str) -> Result<bool, DdosDetectionError> {
-        // This is a simplified anomaly detection algorithm
-        // In a real-world scenario, you would use more sophisticated statistical methods
+        let key = format!("anomaly:{}", ip);
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
         
-        // Get historical traffic data from Redis
-        let key = format_rate_limit_key("traffic_history", ip);
-        let mut conn = self.redis.get_async_connection().await?;
+        let count: u32 = match conn.incr(&key, 1).await {
+            Ok(count) => count,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
         
-        // If no history, return false
-        if !conn.exists(&key).await? {
-            return Ok(false);
+        if count == 1 {
+            let _: () = match conn.expire::<_, ()>(&key, self.config.anomaly_window as usize).await {
+                Ok(_) => (),
+                Err(e) => return Err(DdosDetectionError::RedisError(e)),
+            };
         }
         
-        // Get traffic history
-        let history: Vec<u64> = conn.lrange(&key, 0, -1).await?;
-        
-        // Calculate mean and standard deviation
-        if history.len() < 2 {
-            return Ok(false);
-        }
-        
-        let mean = history.iter().sum::<u64>() as f64 / history.len() as f64;
-        let variance = history.iter()
-            .map(|&x| {
-                let diff = x as f64 - mean;
-                diff * diff
-            })
-            .sum::<f64>() / (history.len() - 1) as f64;
-        let std_dev = variance.sqrt();
-        
-        // Get current traffic
-        let current_traffic = history.last().unwrap();
-        
-        // Check if current traffic is an anomaly
-        let z_score = (*current_traffic as f64 - mean) / std_dev;
-        
-        if z_score.abs() > self.config.anomaly_threshold {
-            // Store in Redis for persistence
-            let key = format_rate_limit_key("ddos_anomaly", ip);
-            conn.set(&key, get_current_timestamp()).await?;
-            conn.expire(&key, self.config.anomaly_window as usize).await?;
-            
+        if count as f64 > self.config.anomaly_threshold {
             return Ok(true);
         }
         
@@ -255,24 +207,26 @@ impl DdosDetector {
     /// 
     /// * `ip` - The IP address to reset detection for
     pub async fn reset_detection(&mut self, ip: &str) -> Result<(), DdosDetectionError> {
-        // Clear in-memory trackers
-        self.connection_tracker.remove(ip);
-        self.request_tracker.remove(ip);
-        self.traffic_tracker.remove(ip);
-        
-        // Clear Redis keys
-        let mut conn = self.redis.get_async_connection().await?;
-        let keys = [
-            format_rate_limit_key("ddos_connection", ip),
-            format_rate_limit_key("ddos_request", ip),
-            format_rate_limit_key("ddos_traffic", ip),
-            format_rate_limit_key("ddos_anomaly", ip),
-        ];
-        
-        for key in keys.iter() {
-            conn.del(key).await?;
-        }
-        
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        let _: () = match conn.del::<_, ()>(format!("connection:{}", ip)).await {
+            Ok(_) => (),
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        let _: () = match conn.del::<_, ()>(format!("request:{}", ip)).await {
+            Ok(_) => (),
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        let _: () = match conn.del::<_, ()>(format!("volume:{}", ip)).await {
+            Ok(_) => (),
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
+        let _: () = match conn.del::<_, ()>(format!("anomaly:{}", ip)).await {
+            Ok(_) => (),
+            Err(e) => return Err(DdosDetectionError::RedisError(e)),
+        };
         Ok(())
     }
 }

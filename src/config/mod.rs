@@ -3,7 +3,6 @@
 //! This module handles loading and managing application configuration
 //! from environment variables and configuration files.
 
-use serde::Deserialize;
 use std::env;
 use config::{Config as ConfigBuilder, ConfigError, Environment, File};
 use crate::models::Config;
@@ -31,6 +30,22 @@ pub fn load_config() -> Result<Config, ConfigError> {
         .set_default("ddos_detection.traffic_volume_window", 60)?
         .set_default("ddos_detection.anomaly_threshold", 3.0)?
         .set_default("ddos_detection.anomaly_window", 300)?
+        // Rule engine defaults
+        .set_default("rule_config.rules_file", "config/rules.json")?
+        .set_default("rule_config.default_priority", 0)?
+        .set_default("rule_config.enabled", true)?
+        // Analytics defaults
+        .set_default("analytics.enabled", true)?
+        .set_default("analytics.storage_type", "redis")?
+        .set_default("analytics.retention_days", 30)?
+        .set_default("analytics.real_time_enabled", true)?
+        // Monitoring defaults
+        .set_default("monitoring.enabled", true)?
+        .set_default("monitoring.interval_seconds", 60)?
+        .set_default("monitoring.alert_thresholds.cpu_usage", 80.0)?
+        .set_default("monitoring.alert_thresholds.memory_usage", 80.0)?
+        .set_default("monitoring.alert_thresholds.request_rate", 1000)?
+        .set_default("monitoring.alert_thresholds.error_rate", 10)?
         .build()?;
 
     config.try_deserialize()

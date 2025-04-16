@@ -1,5 +1,5 @@
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 8080
 
 [redis]
@@ -20,6 +20,27 @@ traffic_volume_threshold = 10000000
 traffic_volume_window = 60
 anomaly_threshold = 3.0
 anomaly_window = 300
+
+[rule_config]
+rules_file = "config/rules.json"
+default_priority = 0
+enabled = true
+
+[analytics]
+enabled = true
+storage_type = "redis"
+retention_days = 30
+real_time_enabled = true
+
+[monitoring]
+enabled = true
+interval_seconds = 60
+
+[monitoring.alert_thresholds]
+cpu_usage = 80.0
+memory_usage = 80.0
+request_rate = 1000
+error_rate = 10
 
 [cloudflare]
 api_token = ""

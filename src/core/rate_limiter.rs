@@ -4,7 +4,6 @@
 //! storage for tracking request counts and implementing the token bucket algorithm.
 
 use redis::AsyncCommands;
-use std::time::SystemTime;
 use crate::models::RateLimitConfig;
 use crate::utils::format_rate_limit_key;
 use thiserror::Error;
@@ -45,13 +44,21 @@ impl RateLimiter {
     /// * `Err(RateLimitError::RedisError)` if there was an error communicating with Redis
     pub async fn check_rate_limit(&mut self, key: &str) -> Result<(), RateLimitError> {
         let window_key = format_rate_limit_key("rate_limit", key);
-        let mut conn = self.redis.get_async_connection().await?;
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(RateLimitError::RedisError(e)),
+        };
         
-        let count: u32 = conn.incr(&window_key, 1).await?;
+        let count: u32 = match conn.incr(&window_key, 1).await {
+            Ok(count) => count,
+            Err(e) => return Err(RateLimitError::RedisError(e)),
+        };
         
         if count == 1 {
-            conn.expire(&window_key, self.config.window_seconds as usize)
-                .await?;
+            let _: () = match conn.expire::<_, ()>(&window_key, self.config.window_seconds as usize).await {
+                Ok(_) => (),
+                Err(e) => return Err(RateLimitError::RedisError(e)),
+            };
         }
 
         if count > self.config.default_limit {
@@ -68,9 +75,52 @@ impl RateLimiter {
     /// * `key` - The key to reset the rate limit for
     pub async fn reset_rate_limit(&mut self, key: &str) -> Result<(), RateLimitError> {
         let window_key = format_rate_limit_key("rate_limit", key);
-        let mut conn = self.redis.get_async_connection().await?;
-        conn.del(&window_key).await?;
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(RateLimitError::RedisError(e)),
+        };
+        
+        let _: () = match conn.del::<_, ()>(&window_key).await {
+            Ok(_) => (),
+            Err(e) => return Err(RateLimitError::RedisError(e)),
+        };
+        
         Ok(())
+    }
+
+    pub async fn get_remaining(&self, key: &str) -> i64 {
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(_) => return 0,
+        };
+
+        let current: i64 = match redis::cmd("GET")
+            .arg(format!("rate_limit:{}", key))
+            .query_async(&mut conn)
+            .await {
+                Ok(count) => count,
+                Err(_) => return self.config.default_limit as i64,
+            };
+
+        (self.config.default_limit as i64) - current
+    }
+
+    pub async fn get_reset_time(&self, key: &str) -> Result<u64, RateLimitError> {
+        let mut conn = match self.redis.get_async_connection().await {
+            Ok(conn) => conn,
+            Err(e) => return Err(RateLimitError::RedisError(e)),
+        };
+        let window_key = format!("rate_limit:{}", key);
+        
+        let ttl: i64 = match redis::cmd("TTL")
+            .arg(&window_key)
+            .query_async(&mut conn)
+            .await {
+                Ok(ttl) => ttl,
+                Err(e) => return Err(RateLimitError::RedisError(e)),
+            };
+            
+        Ok(ttl.max(0) as u64)
     }
 }
 
